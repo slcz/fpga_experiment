@@ -34,6 +34,7 @@ reg [3:0] rxcnt;
 reg rxin_bit;
 reg [7:0]rx_data_reg = 8'b0;
 reg [2:0] rxinput_sync;
+reg rx_rcvd_reg;
 
 assign rx_data = rx_data_reg;
 assign tx_out =
@@ -41,8 +42,8 @@ assign tx_out =
 	(state_tx == idle)                      |
 	(state_tx == stop);
 assign baudrate_clock = clock_shift[4];
-assign tx_done = (state_tx == stop);
-reg rst_state;
+reg tx_done_reg;
+assign tx_done = tx_done_reg;
 
 always @(posedge clk)
 begin
@@ -52,12 +53,9 @@ begin
 		rxcnt            <= 4'b1000;
 		rxin_bit         <= 1'b1;
 		rxinput_sync     <= 3'b111;
-		rst_state        <= 1'b1;
 	end
 	else
 	begin
-		if (baudrate_clock)
-			rst_state <= 1'b0;
 		rxinput_sync <= {rxinput_sync[1:0], rxinput};
 		clock_shift <= clock_shift[3:0] + 1;
 		rxcnt <= rxinput_sync[2] ? ((rxcnt << 1) | (rxcnt[3] << 3)) :
@@ -83,34 +81,51 @@ always @(posedge clk)
 			sampling_cnt <= sampling_cnt + 1'b1;
 assign sampling_tick = (sampling_cnt == 8);
 
-always @(posedge baudrate_clock)
+always @(posedge clk)
 begin
-	if (rst_state)
+	if (rst)
+	begin
 		state_tx         <= idle;
-	else
-	case(state_tx)
-		idle:
-			if (tx_start)
-				state_tx <= start;
-		start:
-			state_tx <= b0;
-		b0, b1, b2, b3, b4, b5, b6, b7:
-			state_tx <= state_tx + 1;
-		stop:
-			if (tx_start)
-				state_tx <= start;
-			else
-				state_tx <= idle;
-		default:
-			state_tx <= inv;
-	endcase
+		tx_done_reg      <= 1'b0;
+	end
+	else 
+	begin
+		if (baudrate_clock)
+			case(state_tx)
+			idle:
+				if (tx_start)
+					state_tx <= start;
+			start:
+				state_tx <= b0;
+			b0, b1, b2, b3, b4, b5, b6:
+				state_tx <= state_tx + 1;
+			b7:
+			begin
+				state_tx <= state_tx + 1;
+				tx_done_reg <= 1'b1;
+			end
+			stop:
+				if (tx_start)
+					state_tx <= start;
+				else
+					state_tx <= idle;
+			default:
+				state_tx <= inv;
+			endcase
+		if (tx_done_reg == 1'b1)
+			tx_done_reg <= 1'b0;
+	end
 end
 
 always @(posedge clk)
 begin
 	if (rst)
+	begin
 		state_rx         <= idle;
+		rx_rcvd_reg      <= 1'b0;
+	end
 	else
+	begin
 	case(state_rx)
 		idle:
 			if (~rxin_bit)
@@ -123,6 +138,8 @@ begin
 			begin
 				state_rx <= state_rx + 1;
 				rx_data_reg <= {rxin_bit, rx_data_reg[7:1]};
+				if (state_rx == b7)
+					rx_rcvd_reg <= 1'b1;
 			end
 		stop:
 			if (sampling_tick)
@@ -133,7 +150,10 @@ begin
 		default:
 			state_rx <= inv;
 	endcase
+	if (rx_rcvd_reg == 1'b1)
+		rx_rcvd_reg <= 1'b0;
+	end
 end
-assign rx_rcvd = state_rx == stop;
+assign rx_rcvd = rx_rcvd_reg;
 
 endmodule
